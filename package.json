@@ -1,6 +1,6 @@
 {
   "name": "local-web-page-viewer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Opens local .html files as real rendered pages, with working CSS, images and video - on desktop and mobile alike.",
   "main": "main.js",
   "private": true,

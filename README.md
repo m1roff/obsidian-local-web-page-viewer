@@ -2,6 +2,31 @@
 
 Opens local `.html` files in your vault as real rendered pages - CSS, images, and video all work, on desktop and mobile alike - instead of Obsidian refusing to display them at all.
 
+[![Buy Me A Coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://buymeacoffee.com/miroff)
+
+## Demo
+
+### Desktop
+
+**Rendering** - opening a `.html` file, zoom, page-native JS interactivity, following a link, opening and pinch/scroll-zooming an image, playing video in the in-app player.
+
+<!-- TODO: paste the GitHub-hosted video URL here after uploading via the web UI, e.g.:
+<video src="https://github.com/user-attachments/assets/REPLACE_ME" controls width="700"></video> -->
+
+**Settings** - pinning/unpinning toolbar actions, reordering them, resetting.
+
+<!-- TODO: paste the GitHub-hosted video URL here after uploading via the web UI -->
+
+### Mobile
+
+**Viewing** - Fit to width, playing video, following a link.
+
+<!-- TODO: paste the GitHub-hosted video URL here after uploading via the web UI -->
+
+**Bookmarks** - opening the Bookmarks menu, jumping to a saved spot, managing bookmarks.
+
+<!-- TODO: paste the GitHub-hosted video URL here after uploading via the web UI -->
+
 ## Why another HTML viewer plugin?
 
 Obsidian doesn't render `.html` files - clicking one in the file explorer either does nothing useful or opens "unsupported file type." A common case: exporting a Telegram channel via Telegram Desktop produces `messages.html` plus `css/`, `images/`, `js/`, `photos/`, `video_files/` - a real static page, just sitting in your vault, unreadable from inside Obsidian.
@@ -11,16 +36,34 @@ Two existing approaches were tried and ruled out during development, for concret
 - **"HTML Reader"-style plugins** (inject the file's contents into an `iframe`/`srcdoc` without inlining its CSS) run straight into Obsidian's own Content-Security-Policy, which restricts `style-src` to `'self'` - an external stylesheet link inside that context gets silently blocked, so the page renders unstyled. Observed directly while comparing plugins during development: a real CSP violation in Obsidian's own console, naming exactly this.
 - **A local-HTTP-server approach** (spin up `http://127.0.0.1:PORT` and point an iframe at it) genuinely works around Obsidian's restrictions, but by its own documentation is **desktop-only** - it needs Node's `http` module, which doesn't exist in Obsidian's mobile (Capacitor) runtime at all. Telegram exports are exactly the kind of thing you'd want to read on your phone.
 
-Local Web Page Viewer takes a third path: no local server, no unstyled DOM injection. It reads the HTML, rewrites every relative resource reference (CSS, images, scripts) to a real vault resource path, inlines stylesheets as `<style>` text, and loads the result through `iframe.srcdoc` - which, unlike a plain `iframe.src` navigation, inherits the trusted origin needed to actually load those resources. The mechanism (and exactly why the alternatives above don't hold up) is documented in detail below. No Node.js, no native code, no bundled browser engine - just the one every platform already has.
+Local Web Page Viewer takes a third path: no local server, no unstyled DOM injection. It reads the HTML, rewrites every relative resource reference (CSS, images, scripts) to a real vault resource path, inlines stylesheets as `<style>` text, and loads the result through `iframe.srcdoc` - which, unlike a plain `iframe.src` navigation, inherits the trusted origin needed to actually load those resources. No Node.js, no native code, no bundled browser engine - just the one every platform already has. The full mechanism, and why the alternatives above don't hold up, is in [How it works](#how-it-works).
 
-## What it does beyond "just render the page"
+## What makes this different from any of the alternatives
 
-- **Zoom in / out / reset**, plus **fit to width** - scales the page's own rendered content (not Obsidian's UI), so a page with no responsive layout of its own still fits a phone screen, or fills a wide desktop pane instead of sitting tiny in the middle of it.
-- **Video actually plays.** Photo/video links that would otherwise navigate the frame away from the page (with no back button to recover) open in a proper in-app viewer instead - a real `<video controls>` player, with pinch-to-zoom and pan on images. If a video's codec can't be decoded here (HEVC/H.265 exports from iPhone are a common case - Chromium doesn't support HEVC at all, a platform limitation no plugin can route around), you get a clear message and a one-click "open in system player" instead of a silent black box.
-- **Bookmarks.** Click "Add bookmark" on the page, click the spot you want to remember, name it - jump back to it later from the Bookmarks menu. Saved per file, synced across every device the vault syncs to.
-- **Remembers where you left off**, per device - scroll back into a page and it reopens exactly where you were, without one device's position overwriting another's.
-- **Configurable toolbar** - pin whichever actions you actually use as their own icon, tuck the rest into one menu, reorder either way. Settings → *Local Web Page Viewer*.
-- **Same feature set on desktop and mobile.** Nothing here is a desktop-only add-on - zoom, bookmarks, scroll memory, the media viewer, all of it works identically on iOS, Android, and desktop, because none of it depends on anything platform-specific.
+Nobody else does all of this - most existing HTML viewers stop at "the text is visible."
+
+| | Local Web Page Viewer | "Inject into DOM" plugins | Local-HTTP-server plugins |
+|---|---|---|---|
+| CSS renders correctly | ✅ | ❌ (blocked by Obsidian's CSP) | ✅ |
+| Works on mobile | ✅ | partial at best | ❌ desktop-only |
+| Video actually plays | ✅ (in-app player + codec fallback) | - | - |
+| Zoom / fit-to-width | ✅ | ❌ | ❌ |
+| Bookmarks inside a page | ✅ | ❌ | ❌ |
+| Remembers scroll position | ✅ (per device) | ❌ | ❌ |
+| Configurable toolbar | ✅ (per device) | ❌ | ❌ |
+| No local server, no native code | ✅ | ✅ | ❌ |
+
+## Features
+
+- **Real rendering, not DOM injection.** CSS, images, fonts, background images via `url()`, inline scripts - all load through the same mechanism Obsidian itself uses for resources embedded in notes, not a workaround that only handles the easy cases.
+- **Zoom in / out / reset**, plus **Fit to width** - scales the page's own rendered content (not Obsidian's UI, so `Cmd +/-` still controls the app as normal). Works on any page regardless of whether it has a responsive layout of its own: a fixed-width "desktop only" export gets shrunk to fit a phone, or stretched to fill a wide pane instead of sitting tiny in the middle of it. Built on `transform: scale()`, not the CSS `zoom` property - WebKit has a long-standing bug ([webkit.org/b/77998](https://bugs.webkit.org/show_bug.cgi?id=77998)) where `zoom` both reads and applies unreliably, confirmed live on-device during development.
+- **Photos and video open safely.** A link to another local file would otherwise navigate the frame away from the page entirely, with no back button to recover - those clicks are now intercepted and redirected to an in-app viewer instead: a real `<video controls>` player for video, pinch-to-zoom-and-pan for images (both mouse and touch).
+- **Video codec fallback.** If a video can't be decoded here (HEVC/H.265 exports from iPhone are the common case, and Chromium doesn't support HEVC on every platform), you get a clear explanation and a one-click "open in system player" instead of a silent black box.
+- **Bookmarks.** Click "Add bookmark," click the spot on the page you want to remember, name it - jump back to it later from the Bookmarks menu, or manage/remove them. Saved per file and synced across every device the vault syncs to.
+- **Remembers where you left off, per device.** Scroll back into a page and it reopens exactly where you were - stored as a fraction of scrollable height, not a raw pixel offset, so it stays correct across different zoom levels and screen sizes.
+- **Fully configurable toolbar, independently per device.** Pin whichever actions you actually use as their own icon in the tab header; unpinned ones tuck into one "Page tools" menu. Reorder with up/down arrows or jump an action straight to the top/bottom. Desktop and mobile keep separate arrangements - a phone defaults to a minimal toolbar (Fit to width front and center), a desktop keeps more icons pinned by default, and neither setting fights the other. Settings changes apply to already-open tabs immediately, no reload needed.
+- **Never loses track of a file.** Renaming or moving a file (or a whole folder) automatically carries its zoom, scroll position, and bookmarks over to the new path; deleting a file cleans those records up instead of leaving orphaned entries behind.
+- **Identical feature set on desktop and mobile.** Nothing here is a desktop-only add-on bolted onto a bare mobile fallback - zoom, bookmarks, scroll memory, the media viewer, all of it works the same on iOS, Android, and desktop, because none of it depends on anything platform-specific.
 
 ## How it works
 
@@ -53,7 +96,21 @@ Not yet in the official Community Plugins directory. Install via [BRAT](https://
 
 ## Usage
 
-Once enabled, `.html` and `.htm` files open in this view automatically - Local Web Page Viewer registers itself as the handler for both extensions. Which toolbar actions show up, and in what order, is configurable under Settings → *Local Web Page Viewer*.
+Once enabled, `.html` and `.htm` files open in this view automatically - Local Web Page Viewer registers itself as the handler for both extensions.
+
+### Toolbar
+
+| Action | What it does |
+|---|---|
+| Reload | Re-renders the page from disk |
+| Zoom in / Zoom out | Scales the page's own content, not Obsidian's interface |
+| Reset zoom | Back to 100% |
+| Fit to width | Scales a page with no responsive layout of its own to fit the pane (mobile) |
+| Add bookmark | Click a spot on the page, name it, jump back later |
+| Bookmarks | Jump to a saved bookmark, or manage/remove them |
+| Open in system browser | Desktop only |
+
+Which of these show as their own icon versus live in the "Page tools" menu, and in what order, is set independently for each device under **Settings → Local Web Page Viewer**.
 
 ## Development
 
@@ -74,6 +131,3 @@ docker compose run --rm build npm run lint   # eslint-plugin-obsidianmd, same ch
 ## License
 
 MIT
-
-
-[![Buy Me A Coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://buymeacoffee.com/miroff)

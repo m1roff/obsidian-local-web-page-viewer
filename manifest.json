@@ -1,7 +1,7 @@
 {
   "id": "local-web-page-viewer",
   "name": "Local Web Page Viewer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minAppVersion": "1.6.6",
   "description": "Opens local .html files as real rendered pages, with working CSS, images and video - zoom, bookmarks and scroll memory included, on desktop and mobile alike.",
   "author": "miroff",

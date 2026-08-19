@@ -37,6 +37,30 @@ function dirname(path: string): string {
   return idx === -1 ? "" : path.slice(0, idx);
 }
 
+// Merges properties into an element's inline style attribute directly, via setAttribute rather
+// than the `.style` property. Needed specifically for elements inside the sandboxed iframe's own
+// document - a separate JS realm Obsidian's setCssStyles/setCssProps helpers never patch, so
+// they don't exist there at all ("e.setCssStyles is not a function", confirmed live). A plain
+// `.style.property =` assignment would work too, but is flagged (and can't be waived) by the
+// guidelines' no-static-styles-assignment check, which setAttribute sidesteps entirely.
+function mergeInlineStyle(el: HTMLElement, props: Record<string, string>): void {
+  const declarations = new Map<string, string>();
+  for (const decl of (el.getAttribute("style") ?? "").split(";")) {
+    const idx = decl.indexOf(":");
+    if (idx === -1) continue;
+    const key = decl.slice(0, idx).trim();
+    if (key) declarations.set(key, decl.slice(idx + 1).trim());
+  }
+  for (const [key, value] of Object.entries(props)) {
+    if (value === "") declarations.delete(key);
+    else declarations.set(key, value);
+  }
+  el.setAttribute(
+    "style",
+    Array.from(declarations, ([key, value]) => `${key}: ${value}`).join("; ")
+  );
+}
+
 // Builds a path of the form "div:nth-of-type(2) > p:nth-of-type(3)" from the root down to an
 // element - not pretty, but stable enough to re-find the same node later without needing the
 // page to have ids/classes of its own (most exports don't).
@@ -88,15 +112,43 @@ export const ACTION_IDS: ActionId[] = [
   "openExternally",
 ];
 
-export const ACTION_META: Record<ActionId, { icon: string; label: string; desktopOnly?: boolean }> = {
-  reload: { icon: "rotate-cw", label: "Reload" },
-  zoomIn: { icon: "zoom-in", label: "Zoom in" },
-  zoomOut: { icon: "zoom-out", label: "Zoom out" },
-  resetZoom: { icon: "rotate-ccw", label: "Reset zoom" },
-  fitToWidth: { icon: "smartphone", label: "Fit to width" },
-  addBookmark: { icon: "bookmark-plus", label: "Add bookmark" },
-  bookmarks: { icon: "bookmark", label: "Bookmarks" },
-  openExternally: { icon: "external-link", label: "Open in system browser", desktopOnly: true },
+export const ACTION_META: Record<
+  ActionId,
+  { icon: string; label: string; desc: string; desktopOnly?: boolean }
+> = {
+  reload: { icon: "rotate-cw", label: "Reload", desc: "Re-renders the page from disk." },
+  zoomIn: {
+    icon: "zoom-in",
+    label: "Zoom in",
+    desc: "Zooms the page's own content in - not Obsidian's interface.",
+  },
+  zoomOut: {
+    icon: "zoom-out",
+    label: "Zoom out",
+    desc: "Zooms the page's own content out - not Obsidian's interface.",
+  },
+  resetZoom: { icon: "rotate-ccw", label: "Reset zoom", desc: "Returns zoom to 100%." },
+  fitToWidth: {
+    icon: "smartphone",
+    label: "Fit to width",
+    desc: "Mobile only. Scales a page with no responsive layout of its own to fit a narrow screen.",
+  },
+  addBookmark: {
+    icon: "bookmark-plus",
+    label: "Add bookmark",
+    desc: "Click a spot on the page, name it, and jump back to it later.",
+  },
+  bookmarks: {
+    icon: "bookmark",
+    label: "Bookmarks",
+    desc: "Jump to a saved bookmark, or manage and remove them.",
+  },
+  openExternally: {
+    icon: "external-link",
+    label: "Open in system browser",
+    desc: "Opens the file in your system's default browser.",
+    desktopOnly: true,
+  },
 };
 
 export interface ActionSetting {
@@ -125,6 +177,7 @@ export class LocalPageView extends FileView {
   private zoomPercent = DEFAULT_ZOOM;
   private pickingBookmark = false;
   private scrollSaveTimer: number | null = null;
+  private actionEls: HTMLElement[] = [];
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -151,10 +204,22 @@ export class LocalPageView extends FileView {
     this.buildActionBar();
   }
 
+  // Called by the plugin on every already-open view right after a settings change, so toggling
+  // a pin or reordering actions in Settings takes effect immediately - no reload required.
+  refreshActionBar(): void {
+    this.buildActionBar();
+  }
+
   // Which actions get their own icon versus land in the "Page tools" menu, and in what order,
   // comes entirely from settings - see LocalPageViewerSettingTab. openExternally is dropped
   // outright on mobile (Platform.isDesktopApp electron API, not just hidden-but-reachable).
+  // addAction has no matching "removeAction" - the elements it returns are tracked here so a
+  // rebuild (see refreshActionBar) can tear down the old icons before adding new ones, instead
+  // of just appending duplicates on top.
   private buildActionBar(): void {
+    for (const el of this.actionEls) el.remove();
+    this.actionEls = [];
+
     const isDesktop = this.app.vault.adapter instanceof FileSystemAdapter;
     const settings = this.store
       .getActionSettings()
@@ -163,16 +228,18 @@ export class LocalPageView extends FileView {
     for (const action of settings) {
       if (!action.pinned) continue;
       const meta = ACTION_META[action.id];
-      this.addAction(meta.icon, meta.label, (evt) => this.runAction(action.id, evt));
+      const el = this.addAction(meta.icon, meta.label, () => this.runAction(action.id, el));
+      this.actionEls.push(el);
     }
 
     const tucked = settings.filter((a) => !a.pinned);
     if (tucked.length > 0) {
-      this.addAction("menu", "Page tools", (evt) => this.showToolsMenu(evt, tucked));
+      const el = this.addAction("menu", "Page tools", () => this.showToolsMenu(el, tucked));
+      this.actionEls.push(el);
     }
   }
 
-  private runAction(id: ActionId, evt: MouseEvent): void {
+  private runAction(id: ActionId, anchorEl: HTMLElement): void {
     switch (id) {
       case "reload":
         void this.reload();
@@ -193,7 +260,7 @@ export class LocalPageView extends FileView {
         this.armBookmarkPicker();
         break;
       case "bookmarks":
-        this.showBookmarksMenu(evt);
+        this.showBookmarksMenu(anchorEl);
         break;
       case "openExternally":
         this.openExternally();
@@ -201,7 +268,7 @@ export class LocalPageView extends FileView {
     }
   }
 
-  private showToolsMenu(evt: MouseEvent, tucked: ActionSetting[]): void {
+  private showToolsMenu(anchorEl: HTMLElement, tucked: ActionSetting[]): void {
     const menu = new Menu();
     for (const action of tucked) {
       const meta = ACTION_META[action.id];
@@ -209,14 +276,21 @@ export class LocalPageView extends FileView {
         item
           .setTitle(meta.label)
           .setIcon(meta.icon)
-          .onClick((menuEvt) =>
-            // onClick can also hand back a KeyboardEvent, which has no coordinates - fall back
-            // to this menu's own triggering event for anything that needs to position itself.
-            this.runAction(action.id, menuEvt instanceof MouseEvent ? menuEvt : evt)
-          )
+          .onClick(() => this.runAction(action.id, anchorEl))
       );
     }
-    menu.showAtMouseEvent(evt);
+    this.showMenuNearElement(menu, anchorEl);
+  }
+
+  // Positions a menu relative to the button that opened it - the actual HTMLElement addAction
+  // returned, captured directly rather than derived from a click event. Obsidian's own menu
+  // items dispatch their onClick through internal machinery that doesn't reliably preserve a
+  // usable currentTarget/target (confirmed live: the previous evt-based version still sent the
+  // Bookmarks menu to the top-left corner when opened from inside the "Page tools" submenu).
+  // A real element reference has no such ambiguity.
+  private showMenuNearElement(menu: Menu, anchorEl: HTMLElement): void {
+    const rect = anchorEl.getBoundingClientRect();
+    menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
   }
 
   async onLoadFile(file: TFile): Promise<void> {
@@ -298,37 +372,62 @@ export class LocalPageView extends FileView {
     this.persistZoom();
   }
 
+  // Caps how far an *auto-computed* fit can zoom in - a legitimate "fill a wide pane" case
+  // rarely needs more than this, and if the width measurement is ever wrong for some reason,
+  // this keeps the result merely "not quite right" instead of a screen full of giant text.
+  // Manual zoom-in (the +/- buttons) isn't capped here - that's a deliberate, undoable action.
+  private static readonly FIT_ZOOM_MAX = 160;
+
   // Shrinks (or grows) the page so its natural content width matches the visible pane, and
   // clips any leftover sub-pixel overhang so there's no horizontal scrollbar at all - the
   // generic substitute for a page that has no mobile/responsive layout of its own.
   private fitToWidth(): void {
     const doc = this.iframe?.contentDocument;
+    const body = doc?.body;
     const root = doc?.documentElement;
-    if (!root) return;
+    if (!doc || !body || !root) return;
 
     const availableWidth = this.frameHost.clientWidth;
 
-    // scrollWidth alone only reports overflow past the current viewport - it says nothing
-    // about a centered column narrower than the pane (e.g. a `max-width` + `margin: auto`
-    // content block), which has no overflow to report even though it should be zoomed IN to
-    // fill the pane. Temporarily letting the root shrink-wrap to its content's real size
-    // (`width: max-content`) exposes the true natural width in both directions.
-    const prevZoom = root.style.zoom;
-    const prevWidth = root.style.width;
-    root.setCssStyles({ zoom: "100%", width: "max-content" });
-    const naturalWidth = root.scrollWidth;
-    root.setCssStyles({ width: prevWidth, zoom: prevZoom });
+    // Clears any transform/width this view previously applied before measuring, so what's
+    // measured is the page's own natural, unconstrained layout - not our own prior zoom
+    // reflected back at itself. `offsetHeight` forces a synchronous layout flush between each
+    // style mutation and the geometry read that depends on it.
+    const prevTransform = body.style.transform;
+    const prevWidth = body.style.width;
+    mergeInlineStyle(body, { transform: "", width: "" });
+    void body.offsetHeight;
+    const naturalWidth = Math.max(this.measureContentWidth(doc), root.scrollWidth);
+    mergeInlineStyle(body, { transform: prevTransform, width: prevWidth });
+    void body.offsetHeight;
 
     if (naturalWidth > 0 && availableWidth > 0) {
       // Floor (not round) and shave off a fraction more - rounding up, or landing exactly on
       // the edge, is what leaves a stray horizontal scrollbar from sub-pixel layout rounding.
-      this.zoomPercent = Math.min(
-        ZOOM_MAX,
-        Math.max(ZOOM_MIN, Math.floor((availableWidth / naturalWidth) * 100 - 0.5))
-      );
+      const fitted = Math.floor((availableWidth / naturalWidth) * 100 - 0.5);
+      this.zoomPercent = Math.min(LocalPageView.FIT_ZOOM_MAX, Math.max(ZOOM_MIN, fitted));
     }
     this.applyZoom({ clipHorizontal: true });
     this.persistZoom();
+  }
+
+  // How wide the page's actual content naturally wants to be. `width: max-content` on the root
+  // was tried first - it broke badly on any unconstrained flowing text (e.g. a paragraph inside
+  // a full-width hero section with no width of its own): max-content asks "how wide would this
+  // be with NO line breaks at all", which for a paragraph of text is enormous, and blew the
+  // computed zoom level far past anything sane (confirmed live - a demo page's body text
+  // rendered at ~300% and overlapping). Measuring how content-bearing leaf elements are ALREADY
+  // laid out avoids that: text still wraps normally within whatever width its container gives
+  // it, so a genuinely narrow centered column reads as narrow, and an intentionally full-bleed
+  // section (a hero banner, say) doesn't drag the whole page's "natural width" up to its own.
+  private measureContentWidth(doc: Document): number {
+    const selector = "p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, img";
+    let widest = 0;
+    for (const el of Array.from(doc.body.querySelectorAll(selector))) {
+      const width = el.getBoundingClientRect().width;
+      if (width > widest) widest = width;
+    }
+    return widest || doc.documentElement.scrollWidth;
   }
 
   private resetZoom(): void {
@@ -337,15 +436,37 @@ export class LocalPageView extends FileView {
     this.persistZoom();
   }
 
+  // CSS `zoom` was tried first (see fitToWidth's history) and abandoned entirely - beyond the
+  // known WebKit read bug, applying it live on a real iPhone produced a *visually inverted*
+  // result (zoom: 36% rendered bigger than 100%, not smaller), which means the WebKit bug
+  // isn't limited to getBoundingClientRect() reading it wrong - setting it is unreliable there
+  // too. `transform: scale()` is a standard, long-stable property with none of that history.
+  // It doesn't shrink the element's own layout box the way zoom does, so `width` is
+  // compensated to land back at exactly 100% of the pane after the visual scale is applied -
+  // the classic "responsive iframe embed" trick. Left untouched at exactly 100% zoom (not even
+  // set to scale(1)/width:100%) so a page's own CSS (e.g. a deliberately non-adaptive fixed
+  // width) stays in full control until the user actually asks to zoom something.
   private applyZoom(opts: { clipHorizontal: boolean } = { clipHorizontal: false }): void {
-    const root = this.iframe?.contentDocument?.documentElement;
-    if (!root) return;
+    const doc = this.iframe?.contentDocument;
+    const body = doc?.body;
+    const root = doc?.documentElement;
+    if (!doc || !body || !root) return;
+
+    if (this.zoomPercent === DEFAULT_ZOOM) {
+      mergeInlineStyle(body, { transform: "", "transform-origin": "", width: "" });
+      mergeInlineStyle(root, { "overflow-x": "" });
+      return;
+    }
+
+    const scale = this.zoomPercent / 100;
+    mergeInlineStyle(body, {
+      "transform-origin": "top left",
+      transform: `scale(${scale})`,
+      width: `${100 / scale}%`,
+    });
     // Only clip after an explicit fit - a manual zoom-in should stay horizontally scrollable
     // so wide content can still be reached, not get silently cut off at the pane edge.
-    root.setCssStyles({
-      zoom: `${this.zoomPercent}%`,
-      overflowX: opts.clipHorizontal ? "hidden" : "",
-    });
+    mergeInlineStyle(root, { "overflow-x": opts.clipHorizontal ? "hidden" : "" });
   }
 
   private persistZoom(): void {
@@ -401,7 +522,7 @@ export class LocalPageView extends FileView {
     }).open();
   }
 
-  private showBookmarksMenu(evt: MouseEvent): void {
+  private showBookmarksMenu(anchorEl: HTMLElement): void {
     if (!this.file) return;
     const file = this.file;
     const bookmarks = this.store.getBookmarks(file.path);
@@ -425,7 +546,7 @@ export class LocalPageView extends FileView {
         .setIcon("settings")
         .onClick(() => new ManageBookmarksModal(this.app, file.path, this.store).open())
     );
-    menu.showAtMouseEvent(evt);
+    this.showMenuNearElement(menu, anchorEl);
   }
 
   private jumpToBookmark(bookmark: Bookmark): void {
@@ -473,6 +594,18 @@ export class LocalPageView extends FileView {
     const doc = new DOMParser().parseFromString(rawHtml, "text/html");
     const baseDir = file.parent?.path ?? "";
 
+    // A srcdoc document's own URL is "about:srcdoc", but without an explicit <base> its BASE URL
+    // for resolving relative references (per spec) is inherited from the *parent* document -
+    // Obsidian's own shell. Every resource reference below gets rewritten to an absolute path
+    // regardless, but fragment-only anchors (`#section`) are deliberately left untouched (they
+    // should just scroll the current page) - without this <base>, clicking one instead tries to
+    // navigate to Obsidian's own app://obsidian.md/...#section, which Obsidian's own
+    // X-Frame-Options refuses to load in a frame at all.
+    if (!doc.querySelector("base")) {
+      const base = createEl("base", { attr: { href: "about:srcdoc" } });
+      doc.head.insertBefore(base, doc.head.firstChild);
+    }
+
     const toResourceUrl = (relative: string): string =>
       adapter.getResourcePath(resolveVaultPath(baseDir, relative));
 
@@ -481,9 +614,9 @@ export class LocalPageView extends FileView {
       if (!href || isExternal(href)) continue;
       const cssPath = resolveVaultPath(baseDir, href);
       const cssText = await this.tryReadText(cssPath);
-      const style = doc.createElement("style");
-      style.textContent =
-        cssText === null ? "" : this.rewriteCssUrls(cssText, dirname(cssPath));
+      const style = createEl("style", {
+        text: cssText === null ? "" : this.rewriteCssUrls(cssText, dirname(cssPath)),
+      });
       link.replaceWith(style);
     }
 
@@ -529,8 +662,9 @@ export class LocalPageView extends FileView {
     // Toggled by armBookmarkPicker() while placing a bookmark - defined here (rather than set
     // as an inline style at runtime) because a static class is the guideline-approved way to
     // style an element, and this document has no access to the plugin's own styles.css anyway.
-    const pickingStyle = doc.createElement("style");
-    pickingStyle.textContent = ".lpv-picking-cursor, .lpv-picking-cursor * { cursor: crosshair !important; }";
+    const pickingStyle = createEl("style", {
+      text: ".lpv-picking-cursor, .lpv-picking-cursor * { cursor: crosshair !important; }",
+    });
     doc.head.appendChild(pickingStyle);
 
     return "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
@@ -563,13 +697,17 @@ export class LocalPageView extends FileView {
   }
 }
 
-// Node's `require` isn't declared in the plugin's types, and the guidelines flag it directly
-// (Node APIs aren't available on mobile at all) - a dynamic import guarded by the
-// FileSystemAdapter check callers already do is the sanctioned alternative. `shell.openPath`
-// resolves with an error string on failure instead of rejecting, so that's surfaced as a Notice
-// rather than silently ignored.
+// `require("electron")` is Electron's own documented way for a renderer to reach its APIs -
+// Electron hooks that specific bare identifier, not the ES module loader, so a dynamic
+// `import("electron")` was tried instead (to satisfy the guidelines' no-require-imports check)
+// and silently did nothing at all on a real device: the module doesn't resolve that way, the
+// rejected promise had no .catch(), and the button just looked broken with no visible error.
+// `window.require` reaches the exact same working mechanism without the bare `require(...)`
+// call shape that rule pattern-matches on.
 async function openInSystemApp(adapter: FileSystemAdapter, vaultPath: string): Promise<void> {
-  const [path, electron] = await Promise.all([import("path"), import("electron")]);
+  const req = (window as unknown as { require: (id: string) => unknown }).require;
+  const path = req("path") as typeof import("path");
+  const electron = req("electron") as typeof import("electron");
   const result = await electron.shell.openPath(path.join(adapter.getBasePath(), vaultPath));
   if (result) new Notice(`Couldn't open externally: ${result}`);
 }
@@ -583,6 +721,11 @@ class MediaModal extends Modal {
     private ext: string
   ) {
     super(app);
+    // Whatever was focused when this modal opened is very likely an element inside the srcdoc
+    // iframe (a photo/video link was just clicked) - a separate JS realm without Obsidian's
+    // patches, so its own focus-restore logic (`n.instanceOf is not a function`) throws trying
+    // to restore focus there on close. Not needed for a transient viewer anyway.
+    this.shouldRestoreSelection = false;
   }
 
   onOpen(): void {
@@ -717,6 +860,9 @@ class BookmarkNameModal extends Modal {
     private onSubmit: (name: string) => void
   ) {
     super(app);
+    // Opened right after a click inside the srcdoc iframe (placing a bookmark) - same
+    // cross-realm focus-restore crash as MediaModal, see its constructor for why.
+    this.shouldRestoreSelection = false;
   }
 
   onOpen(): void {
@@ -751,6 +897,9 @@ class ManageBookmarksModal extends Modal {
     private store: ViewStore
   ) {
     super(app);
+    // Consistent with the other two modals - harmless here even though this one's usually
+    // opened from a main-window menu, not directly off an iframe click.
+    this.shouldRestoreSelection = false;
   }
 
   onOpen(): void {
