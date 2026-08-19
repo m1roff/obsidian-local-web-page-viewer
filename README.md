@@ -10,22 +10,24 @@ Opens local `.html` files in your vault as real rendered pages - CSS, images, an
 
 **Rendering** - opening a `.html` file, zoom, page-native JS interactivity, following a link, opening and pinch/scroll-zooming an image, playing video in the in-app player.
 
-<!-- TODO: paste the GitHub-hosted video URL here after uploading via the web UI, e.g.:
-<video src="https://github.com/user-attachments/assets/REPLACE_ME" controls width="700"></video> -->
+<video src="https://github.com/user-attachments/assets/5b2c54ee-828c-4dc4-847e-2e63459eb123" autoplay loop muted controls></video>
 
 **Settings** - pinning/unpinning toolbar actions, reordering them, resetting.
 
-<!-- TODO: paste the GitHub-hosted video URL here after uploading via the web UI -->
+<video src="https://github.com/user-attachments/assets/33f0c580-762b-4027-95f2-aaa1a741344f" autoplay loop muted controls></video>
 
 ### Mobile
 
 **Viewing** - Fit to width, playing video, following a link.
 
-<!-- TODO: paste the GitHub-hosted video URL here after uploading via the web UI -->
+<video src="https://github.com/user-attachments/assets/768ec4cf-91a0-41b6-b4a4-9bb4a0548cb4" autoplay loop muted controls></video>
+
 
 **Bookmarks** - opening the Bookmarks menu, jumping to a saved spot, managing bookmarks.
 
-<!-- TODO: paste the GitHub-hosted video URL here after uploading via the web UI -->
+<video src="https://github.com/user-attachments/assets/7a74e036-ba44-4f28-99f1-91bb701061f6" autoplay loop muted controls></video>
+
+
 
 ## Why another HTML viewer plugin?
 
